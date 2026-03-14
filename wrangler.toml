@@ -1,6 +1,6 @@
 name = "autonewsrobot-trigger"
 main = "worker/index.js"
-compatibility_date = "2026-03-15"
+compatibility_date = "2024-11-11"
 workers_dev = true
 
 [triggers]
