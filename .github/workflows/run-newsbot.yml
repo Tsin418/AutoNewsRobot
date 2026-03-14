@@ -1,0 +1,43 @@
+name: Run News Bot Once
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger_reason:
+        description: "Why this run was triggered"
+        required: false
+        default: "manual"
+      trigger_time:
+        description: "Trigger time from Worker"
+        required: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests selenium undetected-chromedriver setuptools
+
+      - name: Run one fetch cycle
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          python - << 'PY'
+          import newsbot
+          ok = newsbot.get_coindesk_hot_news(is_morning_summary=False, force_alert=True)
+          print(f"run result: {ok}")
+          PY

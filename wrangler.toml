@@ -1,0 +1,13 @@
+name = "autonewsrobot-trigger"
+main = "worker/index.js"
+compatibility_date = "2026-03-15"
+workers_dev = true
+
+[triggers]
+crons = ["0,30 1-15 * * *", "0 16 * * *"]
+
+[vars]
+GH_OWNER = "Tsin418"
+GH_REPO = "AutoNewsRobot"
+GH_WORKFLOW_ID = "run-newsbot.yml"
+GH_WORKFLOW_REF = "master"

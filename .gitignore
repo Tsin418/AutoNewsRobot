@@ -16,6 +16,10 @@ nohup.out
 .vscode/
 *.code-workspace
 
+# Cloudflare worker local artifacts
+.wrangler/
+node_modules/
+
 # OS files
 .DS_Store
 Thumbs.db
