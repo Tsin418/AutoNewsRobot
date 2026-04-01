@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data
+newsbot_state.json
+daily_articles.json
+
+# Logs and outputs
+*.log
+*_out.txt
+*_err.txt
+nohup.out
+
+# Local editor/workspace files
+.vscode/
+*.code-workspace
+
+# Cloudflare worker local artifacts
+.wrangler/
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
