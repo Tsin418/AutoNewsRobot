@@ -323,7 +323,28 @@ def try_send_pending_daily_summary(now_tz):
 
     return True
 
+
+def is_slot_aligned(minute, interval_minutes):
+    return interval_minutes > 0 and (minute % interval_minutes == 0)
+
+
+def should_send_now(is_morning_summary=False):
+    """Allow pushes only on configured slot boundaries."""
+    now_tz = datetime.now(HKT_TZ)
+    # Morning summary is also bound to slot timing and keeps current behavior.
+    if is_morning_summary:
+        return is_slot_aligned(now_tz.minute, SLOT_INTERVAL_MINUTES)
+    return is_slot_aligned(now_tz.minute, SLOT_INTERVAL_MINUTES)
+
 def get_coindesk_hot_news(is_morning_summary=False, force_alert=False):
+    if not should_send_now(is_morning_summary=is_morning_summary):
+        now_tz = datetime.now(HKT_TZ)
+        print(
+            f"⏭️ 当前时间 {now_tz.strftime('%H:%M:%S')} 非整点槽位，"
+            f"仅允许在每 {SLOT_INTERVAL_MINUTES} 分钟边界推送，跳过本次发送。"
+        )
+        return True
+
     batch = collect_news_batch(
         history_titles=history_titles,
         coindesk_limit=COINDESK_LIMIT,
@@ -402,8 +423,11 @@ if __name__ == '__main__':
     if not try_send_pending_daily_summary(_now):
         print("⚠️ 启动时补偿每日汇总失败，将在下一个定时槽继续重试。")
 
-    print("🚀 启动时自动执行第一次抓取...")
-    get_coindesk_hot_news()
+    if is_slot_aligned(_now.minute, SLOT_INTERVAL_MINUTES):
+        print("🚀 启动时处于时间槽边界，执行首次抓取...")
+        get_coindesk_hot_news()
+    else:
+        print("🕒 启动时不在时间槽边界，等待下一个 :00/:30 槽位后再抓取。")
 
     def _should_run_slot(slot_time):
         in_daytime = RUN_HOUR_START <= slot_time.hour <= RUN_HOUR_END
