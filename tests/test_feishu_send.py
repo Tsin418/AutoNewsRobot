@@ -30,27 +30,6 @@ def dummy_post(url, json=None, timeout=None, verify=None):
     return DummyResponse(200)
 
 
-def run_test():
-    # Monkeypatch requests.post
-    newsbot.requests_post_orig = newsbot.requests.post
-    newsbot.requests.post = dummy_post
-
-    try:
-        ts, sign = newsbot.gen_sign(newsbot.FEISHU_SECRET)
-        print('gen_sign -> timestamp:', ts, 'sign(len):', len(sign))
-
-        ok = newsbot.send_feishu_message('单元测试: 签名与发送', [[{"tag": "text", "text": "测试内容"}]], retries=1)
-        print('send_feishu_message returned:', ok)
-        print('Captured POST URL:', captured.get('url'))
-        print('Captured payload keys:', list(captured.get('json', {}).keys()))
-    finally:
-        newsbot.requests.post = newsbot.requests_post_orig
-
-
-if __name__ == '__main__':
-    run_test()
-
-
 def test_send_feishu_message_posts_signed_payload(monkeypatch):
     captured.clear()
     monkeypatch.setattr(newsbot.requests, "post", dummy_post)
@@ -94,7 +73,7 @@ def test_send_feishu_message_falls_back_to_plain_webhook(monkeypatch):
     assert captured["urls"][1] == newsbot.FEISHU_WEBHOOK
 
 
-def test_force_alert_run_does_not_skip_off_slot(monkeypatch):
+def test_news_run_fetches_and_sends_once(monkeypatch):
     calls = {"collect": 0, "send": 0}
 
     def fake_collect_news_batch(**kwargs):
@@ -110,23 +89,23 @@ def test_force_alert_run_does_not_skip_off_slot(monkeypatch):
         calls["send"] += 1
         return bool(coindesk_list or panews_list)
 
-    monkeypatch.setattr(newsbot, "should_send_now", lambda is_morning_summary=False: False)
     monkeypatch.setattr(newsbot, "collect_news_batch", fake_collect_news_batch)
     monkeypatch.setattr(newsbot, "send_news", fake_send_news)
 
-    assert newsbot.get_coindesk_hot_news(force_alert=True) is True
+    assert newsbot.get_coindesk_hot_news() is True
     assert calls == {"collect": 1, "send": 1}
 
 
-def test_regular_run_still_skips_off_slot(monkeypatch):
-    calls = {"collect": 0}
+def test_run_once_uses_one_shot_fetch(monkeypatch):
+    calls = {"run": 0}
 
-    def fake_collect_news_batch(**kwargs):
-        calls["collect"] += 1
-        return {"ok": True, "coindesk": [], "panews": [], "error": None}
+    def fake_get_coindesk_hot_news(is_morning_summary=False, force_alert=False):
+        calls["run"] += 1
+        assert is_morning_summary is False
+        assert force_alert is True
+        return True
 
-    monkeypatch.setattr(newsbot, "should_send_now", lambda is_morning_summary=False: False)
-    monkeypatch.setattr(newsbot, "collect_news_batch", fake_collect_news_batch)
+    monkeypatch.setattr(newsbot, "get_coindesk_hot_news", fake_get_coindesk_hot_news)
 
-    assert newsbot.get_coindesk_hot_news(force_alert=False) is True
-    assert calls["collect"] == 0
+    assert newsbot.run_once() is True
+    assert calls["run"] == 1
