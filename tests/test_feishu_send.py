@@ -1,5 +1,6 @@
 import os
 import sys
+import importlib
 # Ensure project root is on sys.path when running tests directly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import newsbot
@@ -46,6 +47,20 @@ def test_send_feishu_message_posts_signed_payload(monkeypatch):
     assert captured["json"]["msg_type"] == "post"
     assert captured["timeout"] == newsbot.FEISHU_REQUEST_TIMEOUT_SECONDS
     assert captured["verify"] is False
+
+
+def test_empty_feishu_env_uses_defaults(monkeypatch):
+    monkeypatch.setenv("FEISHU_WEBHOOK", "")
+    monkeypatch.setenv("FEISHU_SECRET", "")
+
+    reloaded = importlib.reload(newsbot)
+    try:
+        assert reloaded.FEISHU_WEBHOOK == reloaded.DEFAULT_FEISHU_WEBHOOK
+        assert reloaded.FEISHU_SECRET == reloaded.DEFAULT_FEISHU_SECRET
+    finally:
+        monkeypatch.delenv("FEISHU_WEBHOOK", raising=False)
+        monkeypatch.delenv("FEISHU_SECRET", raising=False)
+        importlib.reload(newsbot)
 
 
 def test_send_feishu_message_falls_back_to_plain_webhook(monkeypatch):

@@ -1,6 +1,7 @@
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
+import builtins
 import sys
 # Ensure stdout/stderr use UTF-8 so emoji and CJK characters don't crash on Windows
 try:
@@ -9,7 +10,7 @@ try:
 except (AttributeError, OSError):
     pass
 
-_builtin_print = print
+_builtin_print = builtins.print
 
 
 def _safe_print(*args, **kwargs):
@@ -66,11 +67,17 @@ from newsbot_config import (
 )
 from news_scraper import collect_news_batch
 
-FEISHU_WEBHOOK = os.getenv(
-    "FEISHU_WEBHOOK",
-    "https://open.feishu.cn/open-apis/bot/v2/hook/730fd294-c270-4e81-b94d-6c6768d9112d",
-).strip()
-FEISHU_SECRET = os.getenv("FEISHU_SECRET", "2JdFHxHgRvsiICu8fZX3Lh").strip()
+DEFAULT_FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/730fd294-c270-4e81-b94d-6c6768d9112d"
+DEFAULT_FEISHU_SECRET = "2JdFHxHgRvsiICu8fZX3Lh"
+
+
+def env_or_default(name, default):
+    value = os.getenv(name, "").strip()
+    return value or default
+
+
+FEISHU_WEBHOOK = env_or_default("FEISHU_WEBHOOK", DEFAULT_FEISHU_WEBHOOK)
+FEISHU_SECRET = env_or_default("FEISHU_SECRET", DEFAULT_FEISHU_SECRET)
 
 history_titles = set()
 
