@@ -25,10 +25,18 @@ Check values in `wrangler.toml`:
 - `GH_WORKFLOW_ID`
 - `GH_WORKFLOW_REF`
 
-## 5) Deploy
+## 5) Configure GitHub Actions secrets
+The Python bot reads these secrets from the workflow environment:
+- `FEISHU_WEBHOOK`
+- `FEISHU_SECRET`
+
+The current code still has a fallback for compatibility, but GitHub Secrets should
+be the source of truth for new deployments.
+
+## 6) Deploy
 - `wrangler deploy`
 
-## 6) Verify
+## 7) Verify
 - Open `<worker-url>/health` and expect `ok`
 - Check GitHub Actions tab for dispatched workflow runs
 

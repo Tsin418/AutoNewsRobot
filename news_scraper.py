@@ -1,19 +1,134 @@
 import io
+import html
+from html.parser import HTMLParser
 import os
 import re
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 import zipfile
+from urllib.parse import urljoin
 
 import requests
-from selenium.webdriver.common.by import By
-import undetected_chromedriver as uc
 
 from newsbot_config import (
     DRIVER_PAGE_LOAD_TIMEOUT,
     SCROLL_SLEEP_SECONDS,
 )
+
+
+COINDESK_RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+PANEWS_HOME_URL = "https://www.panewslab.com/zh"
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+
+class LinkTextParser(HTMLParser):
+    """Small anchor extractor used as a dependency-free fallback parser."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links = []
+        self._href_stack = []
+        self._text_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a":
+            return
+        href = dict(attrs).get("href")
+        self._href_stack.append(href)
+        self._text_parts.append([])
+
+    def handle_data(self, data):
+        if self._text_parts:
+            self._text_parts[-1].append(data)
+
+    def handle_endtag(self, tag):
+        if tag != "a" or not self._href_stack:
+            return
+        href = self._href_stack.pop()
+        parts = self._text_parts.pop()
+        text = html.unescape(" ".join("".join(parts).split()))
+        if href and text:
+            self.links.append((text, href))
+
+
+def _http_session():
+    sess = requests.Session()
+    sess.verify = False
+    sess.headers.update(DEFAULT_HEADERS)
+    return sess
+
+
+def _append_unique(result, seen, title, link, history_titles, limit):
+    title = " ".join(html.unescape(title or "").split())
+    link = (link or "").strip()
+    if not title or not link:
+        return False
+    if title in seen or title in history_titles:
+        return False
+    result.append({"title": title, "link": link})
+    seen.add(title)
+    return len(result) >= limit
+
+
+def _scrape_coindesk_http(history_titles, limit=5, logger=print):
+    logger("正在通过 CoinDesk RSS 获取新闻...")
+    try:
+        resp = _http_session().get(COINDESK_RSS_URL, timeout=20)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+    except Exception as e:
+        logger(f"CoinDesk RSS 获取失败: {e}")
+        return []
+
+    result = []
+    seen = set()
+    for item in root.findall(".//item"):
+        title = item.findtext("title")
+        link = item.findtext("link") or item.findtext("guid")
+        if _append_unique(result, seen, title, link, history_titles, limit):
+            break
+
+    logger(f"CoinDesk RSS 获取到 {len(result)} 条新文章")
+    return result
+
+
+def _scrape_panews_http(history_titles, limit=10, logger=print):
+    logger("正在通过 PANews 网页文本获取新闻...")
+    try:
+        resp = _http_session().get(PANEWS_HOME_URL, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        logger(f"PANews 网页获取失败: {e}")
+        return []
+
+    parser = LinkTextParser()
+    parser.feed(resp.text)
+
+    result = []
+    seen = set()
+    for title, href in parser.links:
+        if not (
+            "/zh/articledetails/" in href
+            or "/zh/newsdetails/" in href
+            or "articledetails" in href
+            or "newsdetails" in href
+        ):
+            continue
+        link = urljoin(PANEWS_HOME_URL, href)
+        if _append_unique(result, seen, title, link, history_titles, limit):
+            break
+
+    logger(f"PANews 网页文本获取到 {len(result)} 条新文章")
+    return result
 
 
 def get_or_download_chromedriver(chrome_version, logger=print):
@@ -151,6 +266,7 @@ def get_chrome_major_version():
         ["chromium", "--version"],
     ]
     try:
+        import undetected_chromedriver as uc
         chrome_path = uc.find_chrome_executable()
         if chrome_path:
             candidates.insert(0, [chrome_path, "--version"])
@@ -171,6 +287,8 @@ def get_chrome_major_version():
 
 
 def _scrape_coindesk(driver, history_titles, limit=5, logger=print):
+    from selenium.webdriver.common.by import By
+
     logger("正在访问 CoinDesk...")
     driver.set_page_load_timeout(DRIVER_PAGE_LOAD_TIMEOUT)
     try:
@@ -208,6 +326,8 @@ def _scrape_coindesk(driver, history_titles, limit=5, logger=print):
 
 
 def _scrape_panews(driver, history_titles, limit=10, logger=print):
+    from selenium.webdriver.common.by import By
+
     logger("正在访问 PANews...")
     driver.set_page_load_timeout(DRIVER_PAGE_LOAD_TIMEOUT)
     try:
@@ -248,6 +368,28 @@ def _scrape_panews(driver, history_titles, limit=10, logger=print):
 
 def collect_news_batch(history_titles, coindesk_limit, panews_limit, logger=print):
     """Fetch latest CoinDesk/PANews items in one browser session."""
+    coindesk_news = _scrape_coindesk_http(history_titles, limit=coindesk_limit, logger=logger)
+    panews_news = _scrape_panews_http(history_titles, limit=panews_limit, logger=logger)
+    if coindesk_news or panews_news:
+        logger(f"\n合计: CoinDesk {len(coindesk_news)} 条 + PANews {len(panews_news)} 条")
+        return {
+            "ok": True,
+            "coindesk": coindesk_news,
+            "panews": panews_news,
+            "error": None,
+        }
+
+    logger("HTTP/RSS 未获取到新闻，尝试启动浏览器兜底抓取...")
+    try:
+        import undetected_chromedriver as uc
+    except ImportError as e:
+        return {
+            "ok": False,
+            "coindesk": [],
+            "panews": [],
+            "error": f"HTTP/RSS 未获取到新闻，且缺少浏览器抓取依赖: {e}",
+        }
+
     options = uc.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")

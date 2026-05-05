@@ -22,6 +22,7 @@ captured = {}
 
 
 def dummy_post(url, json=None, timeout=None, verify=None):
+    captured.setdefault("urls", []).append(url)
     captured['url'] = url
     captured['json'] = json
     captured['timeout'] = timeout
@@ -48,3 +49,84 @@ def run_test():
 
 if __name__ == '__main__':
     run_test()
+
+
+def test_send_feishu_message_posts_signed_payload(monkeypatch):
+    captured.clear()
+    monkeypatch.setattr(newsbot.requests, "post", dummy_post)
+
+    ok = newsbot.send_feishu_message(
+        "单元测试: 签名与发送",
+        [[{"tag": "text", "text": "测试内容"}]],
+        retries=1,
+    )
+
+    assert ok is True
+    assert "timestamp=" in captured["url"]
+    assert "sign=" in captured["url"]
+    assert captured["json"]["msg_type"] == "post"
+    assert captured["timeout"] == newsbot.FEISHU_REQUEST_TIMEOUT_SECONDS
+    assert captured["verify"] is False
+
+
+def test_send_feishu_message_falls_back_to_plain_webhook(monkeypatch):
+    captured.clear()
+    calls = {"count": 0}
+
+    def flaky_post(url, json=None, timeout=None, verify=None):
+        captured.setdefault("urls", []).append(url)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return DummyResponse(200, {"code": 999, "msg": "signed url rejected"})
+        return DummyResponse(200)
+
+    monkeypatch.setattr(newsbot.requests, "post", flaky_post)
+
+    ok = newsbot.send_feishu_message(
+        "单元测试: URL 兜底",
+        [[{"tag": "text", "text": "测试内容"}]],
+        retries=1,
+    )
+
+    assert ok is True
+    assert calls["count"] == 2
+    assert "timestamp=" in captured["urls"][0]
+    assert captured["urls"][1] == newsbot.FEISHU_WEBHOOK
+
+
+def test_force_alert_run_does_not_skip_off_slot(monkeypatch):
+    calls = {"collect": 0, "send": 0}
+
+    def fake_collect_news_batch(**kwargs):
+        calls["collect"] += 1
+        return {
+            "ok": True,
+            "coindesk": [{"title": "CoinDesk test", "link": "https://example.com/c"}],
+            "panews": [],
+            "error": None,
+        }
+
+    def fake_send_news(coindesk_list, panews_list, is_morning_summary=False):
+        calls["send"] += 1
+        return bool(coindesk_list or panews_list)
+
+    monkeypatch.setattr(newsbot, "should_send_now", lambda is_morning_summary=False: False)
+    monkeypatch.setattr(newsbot, "collect_news_batch", fake_collect_news_batch)
+    monkeypatch.setattr(newsbot, "send_news", fake_send_news)
+
+    assert newsbot.get_coindesk_hot_news(force_alert=True) is True
+    assert calls == {"collect": 1, "send": 1}
+
+
+def test_regular_run_still_skips_off_slot(monkeypatch):
+    calls = {"collect": 0}
+
+    def fake_collect_news_batch(**kwargs):
+        calls["collect"] += 1
+        return {"ok": True, "coindesk": [], "panews": [], "error": None}
+
+    monkeypatch.setattr(newsbot, "should_send_now", lambda is_morning_summary=False: False)
+    monkeypatch.setattr(newsbot, "collect_news_batch", fake_collect_news_batch)
+
+    assert newsbot.get_coindesk_hot_news(force_alert=False) is True
+    assert calls["collect"] == 0

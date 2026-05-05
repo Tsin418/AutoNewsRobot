@@ -79,8 +79,11 @@ from newsbot_config import (
 from news_scraper import collect_news_batch
 from news_scheduler import run_scheduler_loop
 
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/730fd294-c270-4e81-b94d-6c6768d9112d"
-FEISHU_SECRET = "2JdFHxHgRvsiICu8fZX3Lh"
+FEISHU_WEBHOOK = os.getenv(
+    "FEISHU_WEBHOOK",
+    "https://open.feishu.cn/open-apis/bot/v2/hook/730fd294-c270-4e81-b94d-6c6768d9112d",
+).strip()
+FEISHU_SECRET = os.getenv("FEISHU_SECRET", "2JdFHxHgRvsiICu8fZX3Lh").strip()
 
 DAILY_FILE = "daily_articles.json"
 STATE_FILE = "newsbot_state.json"
@@ -153,6 +156,16 @@ def gen_sign(secret):
     sign = base64.b64encode(hmac_code).decode('utf-8')
     return timestamp, sign
 
+
+def build_feishu_urls(timestamp, sign):
+    # Prefer signed query URL, and fallback to plain webhook URL.
+    # Some network gateways and bot setups are picky about one style.
+    return [
+        f"{FEISHU_WEBHOOK}?timestamp={timestamp}&sign={quote_plus(sign)}",
+        FEISHU_WEBHOOK,
+    ]
+
+
 def send_feishu_message(title, block_arr, retries=FEISHU_RETRIES):
     if not block_arr:
         return True
@@ -165,15 +178,8 @@ def send_feishu_message(title, block_arr, retries=FEISHU_RETRIES):
             "content": {"post": {"zh_cn": {"title": title, "content": block_arr}}}
         }
 
-        try:
-            # Prefer signed query URL, and fallback to plain webhook URL.
-            # Some network gateways and bot setups are picky about one style.
-            urls = [
-                f"{FEISHU_WEBHOOK}?timestamp={timestamp}&sign={quote_plus(sign)}",
-                FEISHU_WEBHOOK,
-            ]
-
-            for target_url in urls:
+        for target_url in build_feishu_urls(timestamp, sign):
+            try:
                 res = requests.post(
                     target_url,
                     json=payload,
@@ -189,14 +195,28 @@ def send_feishu_message(title, block_arr, retries=FEISHU_RETRIES):
 
                 print("✅ 成功推送到飞书！")
                 return True
-        except Exception as e:
-            last_error = e
-            print(f"❌ 推送飞书失败(第 {attempt}/{retries} 次): {e}")
-            if attempt < retries:
-                time.sleep(attempt * FEISHU_RETRY_BACKOFF_BASE_SECONDS)
+            except Exception as e:
+                last_error = e
+                print(f"❌ 推送飞书失败(第 {attempt}/{retries} 次): {e}")
+
+        if attempt < retries:
+            time.sleep(attempt * FEISHU_RETRY_BACKOFF_BASE_SECONDS)
 
     print(f"❌ 推送飞书最终失败: {last_error}")
     return False
+
+
+def add_news_section(block_arr, source_name, news_list, daily_bucket):
+    if not news_list:
+        return
+
+    block_arr.append([{"tag": "text", "text": f"📰 {source_name}"}])
+    for i, news in enumerate(news_list, 1):
+        block_arr.append([{"tag": "text", "text": f"{i}. {news['title']}\n{news['link']}\n"}])
+        history_titles.add(news["title"])
+        if not any(a["title"] == news["title"] for a in daily_bucket):
+            daily_bucket.append(news)
+
 
 def send_news(coindesk_list, panews_list, is_morning_summary=False):
     """Send one combined Feishu message with CoinDesk + PANews articles."""
@@ -213,22 +233,8 @@ def send_news(coindesk_list, panews_list, is_morning_summary=False):
         return False
 
     block_arr = []
-
-    if coindesk_list:
-        block_arr.append([{"tag": "text", "text": "📰 CoinDesk"}])
-        for i, news in enumerate(coindesk_list, 1):
-            block_arr.append([{"tag": "text", "text": f"{i}. {news['title']}\n{news['link']}\n"}])
-            history_titles.add(news['title'])
-            if not any(a['title'] == news['title'] for a in daily_articles["coindesk"]):
-                daily_articles["coindesk"].append(news)
-
-    if panews_list:
-        block_arr.append([{"tag": "text", "text": "\n📰 PANews"}])
-        for i, news in enumerate(panews_list, 1):
-            block_arr.append([{"tag": "text", "text": f"{i}. {news['title']}\n{news['link']}\n"}])
-            history_titles.add(news['title'])
-            if not any(a['title'] == news['title'] for a in daily_articles["panews"]):
-                daily_articles["panews"].append(news)
+    add_news_section(block_arr, "CoinDesk", coindesk_list, daily_articles["coindesk"])
+    add_news_section(block_arr, "PANews", panews_list, daily_articles["panews"])
 
     save_daily_articles(daily_articles, daily_articles_date)
 
@@ -337,13 +343,20 @@ def should_send_now(is_morning_summary=False):
     return is_slot_aligned(now_tz.minute, SLOT_INTERVAL_MINUTES)
 
 def get_coindesk_hot_news(is_morning_summary=False, force_alert=False):
-    if not should_send_now(is_morning_summary=is_morning_summary):
+    slot_ok = should_send_now(is_morning_summary=is_morning_summary)
+    if not slot_ok and not force_alert:
         now_tz = datetime.now(HKT_TZ)
         print(
             f"⏭️ 当前时间 {now_tz.strftime('%H:%M:%S')} 非整点槽位，"
             f"仅允许在每 {SLOT_INTERVAL_MINUTES} 分钟边界推送，跳过本次发送。"
         )
         return True
+    if force_alert and not slot_ok:
+        now_tz = datetime.now(HKT_TZ)
+        print(
+            f"⏩ 当前时间 {now_tz.strftime('%H:%M:%S')} 已偏离槽位，"
+            "但这是一次性触发任务，继续抓取。"
+        )
 
     batch = collect_news_batch(
         history_titles=history_titles,
