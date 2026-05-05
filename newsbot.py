@@ -73,6 +73,8 @@ DEFAULT_FEISHU_SECRET = "2JdFHxHgRvsiICu8fZX3Lh"
 
 def env_or_default(name, default):
     value = os.getenv(name, "").strip()
+    if value.startswith("${") and value.endswith("}"):
+        value = value[2:-1].strip()
     return value or default
 
 

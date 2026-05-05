@@ -63,6 +63,20 @@ def test_empty_feishu_env_uses_defaults(monkeypatch):
         importlib.reload(newsbot)
 
 
+def test_wrapped_feishu_env_is_unwrapped(monkeypatch):
+    monkeypatch.setenv("FEISHU_WEBHOOK", "${https://example.com/hook}")
+    monkeypatch.setenv("FEISHU_SECRET", "${secret-value}")
+
+    reloaded = importlib.reload(newsbot)
+    try:
+        assert reloaded.FEISHU_WEBHOOK == "https://example.com/hook"
+        assert reloaded.FEISHU_SECRET == "secret-value"
+    finally:
+        monkeypatch.delenv("FEISHU_WEBHOOK", raising=False)
+        monkeypatch.delenv("FEISHU_SECRET", raising=False)
+        importlib.reload(newsbot)
+
+
 def test_send_feishu_message_falls_back_to_plain_webhook(monkeypatch):
     captured.clear()
     calls = {"count": 0}
