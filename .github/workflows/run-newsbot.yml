@@ -51,7 +51,7 @@ jobs:
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          FEISHU_WEBHOOK: ${https://open.feishu.cn/open-apis/bot/v2/hook/730fd294-c270-4e81-b94d-6c6768d9112d}
+          FEISHU_SECRET: ${2JdFHxHgRvsiICu8fZX3Lh}
         run: |
           python newsbot.py
