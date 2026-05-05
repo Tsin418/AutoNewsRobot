@@ -20,6 +20,27 @@ from newsbot_config import (
 
 COINDESK_RSS_URL = "https://www.coindesk.com/arc/outboundfeeds/rss/"
 PANEWS_HOME_URL = "https://www.panewslab.com/zh"
+PANEWS_RSS_URLS = (
+    "https://rss.panewslab.com/",
+    "https://rss.panewslab.com/zh",
+    "https://rss.panewslab.com/zh.xml",
+)
+PANEWS_PAGE_URLS = (
+    "https://www.panewslab.com/zh",
+    "https://www.panewslab.com/zh/index.html",
+    "https://t-www.panewslab.com/zh",
+    "https://t-www.panewslab.com/zh/index.html",
+)
+PANEWS_ARTICLE_PATTERNS = (
+    "/zh/articledetails/",
+    "/zh/newsdetails/",
+    "/zh/articles/",
+    "/en/articledetails/",
+    "/en/newsdetails/",
+    "/en/articles/",
+    "articledetails",
+    "newsdetails",
+)
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -102,28 +123,56 @@ def _scrape_coindesk_http(history_titles, limit=5, logger=print):
 
 
 def _scrape_panews_http(history_titles, limit=10, logger=print):
-    logger("正在通过 PANews 网页文本获取新闻...")
-    try:
-        resp = _http_session().get(PANEWS_HOME_URL, timeout=20)
-        resp.raise_for_status()
-    except Exception as e:
-        logger(f"PANews 网页获取失败: {e}")
+    logger("正在通过 PANews RSS/网页文本获取新闻...")
+    session = _http_session()
+
+    for url in PANEWS_RSS_URLS:
+        try:
+            resp = session.get(url, timeout=12)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+        except Exception as e:
+            logger(f"PANews RSS 获取失败({url}): {e}")
+            continue
+
+        result = []
+        seen = set()
+        for item in root.findall(".//item") + root.findall(".//{http://www.w3.org/2005/Atom}entry"):
+            title = item.findtext("title")
+            link = item.findtext("link") or item.findtext("guid")
+            if link is None:
+                atom_link = item.find("{http://www.w3.org/2005/Atom}link")
+                link = atom_link.get("href") if atom_link is not None else None
+            if _append_unique(result, seen, title, link, history_titles, limit):
+                break
+        if result:
+            logger(f"PANews RSS 获取到 {len(result)} 条新文章")
+            return result
+
+    html_text = None
+    base_url = PANEWS_HOME_URL
+    for url in PANEWS_PAGE_URLS:
+        try:
+            resp = session.get(url, timeout=12)
+            resp.raise_for_status()
+            html_text = resp.text
+            base_url = url
+            break
+        except Exception as e:
+            logger(f"PANews 网页获取失败({url}): {e}")
+
+    if not html_text:
         return []
 
     parser = LinkTextParser()
-    parser.feed(resp.text)
+    parser.feed(html_text)
 
     result = []
     seen = set()
     for title, href in parser.links:
-        if not (
-            "/zh/articledetails/" in href
-            or "/zh/newsdetails/" in href
-            or "articledetails" in href
-            or "newsdetails" in href
-        ):
+        if not any(pattern in href for pattern in PANEWS_ARTICLE_PATTERNS):
             continue
-        link = urljoin(PANEWS_HOME_URL, href)
+        link = urljoin(base_url, href)
         if _append_unique(result, seen, title, link, history_titles, limit):
             break
 
@@ -370,7 +419,7 @@ def collect_news_batch(history_titles, coindesk_limit, panews_limit, logger=prin
     """Fetch latest CoinDesk/PANews items in one browser session."""
     coindesk_news = _scrape_coindesk_http(history_titles, limit=coindesk_limit, logger=logger)
     panews_news = _scrape_panews_http(history_titles, limit=panews_limit, logger=logger)
-    if coindesk_news or panews_news:
+    if coindesk_news and panews_news:
         logger(f"\n合计: CoinDesk {len(coindesk_news)} 条 + PANews {len(panews_news)} 条")
         return {
             "ok": True,
@@ -379,7 +428,7 @@ def collect_news_batch(history_titles, coindesk_limit, panews_limit, logger=prin
             "error": None,
         }
 
-    logger("HTTP/RSS 未获取到新闻，尝试启动浏览器兜底抓取...")
+    logger("部分来源未获取到新闻，尝试启动浏览器兜底抓取...")
     try:
         import undetected_chromedriver as uc
     except ImportError as e:
@@ -407,8 +456,10 @@ def collect_news_batch(history_titles, coindesk_limit, panews_limit, logger=prin
         else:
             driver = uc.Chrome(options=options, version_main=chrome_ver)
 
-        coindesk_news = _scrape_coindesk(driver, history_titles, limit=coindesk_limit, logger=logger)
-        panews_news = _scrape_panews(driver, history_titles, limit=panews_limit, logger=logger)
+        if not coindesk_news:
+            coindesk_news = _scrape_coindesk(driver, history_titles, limit=coindesk_limit, logger=logger)
+        if not panews_news:
+            panews_news = _scrape_panews(driver, history_titles, limit=panews_limit, logger=logger)
 
         logger(f"\n合计: CoinDesk {len(coindesk_news)} 条 + PANews {len(panews_news)} 条")
         return {
